@@ -1,0 +1,75 @@
+# RESTART FILE TO NEMD VISCOSITY SIMULATION OF n-hexadecane (C16H34) WITH L-OPLS FORCE FIELD.
+
+read_restart restart.2etapaNPT.*
+
+# DECLARAÇÃO DE VARIÁVEIS 
+# Variáveis para manipulação de daddos:
+
+variable    Ts equal 300		    										# Temperatura do experimento (K)
+variable	Ps equal 1   	    											# Pressao do experimento (atm)
+variable    T  equal temp		    										# Variável para manipulação da temperatura 
+variable	P  equal press		    										# Variável para manipulação da pressão
+variable    V  equal vol         											# Volume
+variable 	ro equal density												# Densidade
+variable 	st equal step													# Variável auxiliar para impressão do step.
+variable	srate equal 0.00026												# Velocidade na superficie livre do liquido em (distance/time units - A/fs)
+variable    dt equal 0.5          											# Passo de tempo (fs) - integração
+variable    p  equal 100         											# Correlação de comprimento
+variable    s  equal 10          											# Intervalo de amostragem 
+variable    d  equal $p*$s       											# Parâmetro de impressão e cálculos (output do programa)
+
+# Fatores de conversão (LAMMPS real units => SI):
+
+variable    atm2Pa 	equal 101325.0                                         	# Pressao
+variable    fs2s 	equal 1.0e-15                                          	# Tempo
+variable    convert equal ${atm2Pa}*${fs2s} 				                # Viscosidade (atm.fs => Pa.s)
+
+thermo      $d                                             					# Intervalo de impressão de dados
+neigh_modify 	every 10 delay 20 check yes		
+
+# DEFINIÇÃO DO CAMPO DE FORÇA L-OPLS (SEÇÃO MANTIDA PARA DEBUGGING)
+
+# pair_coeff   1 1  0.066  3.50    															# CT
+# pair_coeff   2 2  0.030  2.50    															# HC
+# pair_coeff   3 3  0.026  2.50    															# HC1
+# bond_coeff   1   310.0  1.526    															# CT-CT
+# bond_coeff   2   331.0  1.090    															# CT-HC
+# bond_coeff   3   331.0  1.090																# CT-HC1
+# angle_coeff  1    40.00 109.5    															# CT-CT-CT
+# angle_coeff  2    35.0  109.5    															# CT-CT-HC
+# angle_coeff  3    35.0  109.5    															# CT-CT-HC1
+# angle_coeff  4    35.0  109.5    															# HC-CT-HC
+# angle_coeff  5    35.0  109.5    															# HC1-CT-HC1
+dihedral_coeff 1 fourier 4 -0.07312 0 90.0 0.32234 1 0.0 -0.21434 -2 -180.0 0.17822 3 0.0  	# CT-CT-CT-CT
+dihedral_coeff 2* opls 0.000 0.000 0.300 0.000 												# CT-CT-CT-HC = CT-CT-CT-HC1 = HC-CT-CT-HC = HC-CT-CT-HC1
+# dihedral_coeff 3 opls 0.000 0.000 0.300 0.000 											# CT-CT-CT-HC1
+# dihedral_coeff 4 opls 0.000 0.000 0.300 0.000 											# HC-CT-CT-HC
+# dihedral_coeff 5 opls 0.000 0.000 0.300 0.000 											# HC-CT-CT-HC1
+
+# ETAPA: Viscosidade NEMD via nvt/sllod & fix deform
+
+change_box 		all triclinic										       # Mudança do sistema cristalino para cisalhamento.
+reset_timestep	0
+variable	    xyrate equal ${srate}/ly						           # Cálculo da taxa de cisalhamento
+variable	    u equal -pxy/(v_srate/ly)						           # Definição da viscosidade
+fix		        9 all nvt/sllod temp ${Ts} ${Ts} 100 drag 0			       # Atualizacao das posicões e velocidades no ensemble NVT para experimento NEMD.
+fix		        10 all deform 1 xy erate ${xyrate} remap v 		           # Fix para aplicar a taxa de cisalhamento no sistema.
+compute		    Velx all chunk/atom bin/1d y center 0.05 units reduced	   # Segmentação do sistema para agrupamento das moléculas.
+fix		        11 all ave/chunk $s $p $d Velx vx file velxNC16.nemd	       # Cálculo e geracao do arquivo para visualizar o perfil de velocidade.
+fix		        12 all ave/time $s $p $d v_u ave running start 1000	       # Cálculo da viscosidade (unidades LAMMPS real = atm.fs)
+variable	    uPas  equal ${convert}*f_12			     		           # Cálculo da viscosidade em Pa.s
+compute		    TempG all temp							                   # Calcula a temperatura com base nas velocidade do sistema (fluxo + átomos)
+compute		    TempA all temp/deform						               # Calcula a temperatura com base na velocidade dos átomos. 
+thermo_modify   temp TempA								                   # Atribuicao de novo valor de temperatura para o sistema 
+fix		        13 all print 1000 "$(v_uPas:%.8f)" file viscosidadeNEMD.txt screen no title "Viscosidade (Pa.s) - Etapa NEMD"          # Arquivo para registro da viscosidade NEMD. 
+fix		        14 all print 1000 "$(v_P:%.8g)" file pressaoNEMD.txt screen no title "Pressao (atm) - Etapa NEMD"        			# Arquivo para registro da pressao NEMD. 
+fix		        15 all print 1000 "$(v_T:%.8g)" file temperaturaNEMD.txt screen no title "Temperatura (K) - Etapa NEMD"          		# Arquivo para registro da temperatura NEMD. 
+thermo_style custom step temp v_uPas f_12 press etotal  				   # Parâmetros de monitoramento durante etapa NEMD.
+thermo_modify	format line "%ld %.6g %.6g %.8g %.6g %.8g" 			       # Comando para definir a formatação dos números na impressão
+run             4000000                                                    # Duracao da simulacao: 4000000*dt = 2000000 fs = 2000 ps = 2 ns
+
+print	     """
+Density (g/cm3) = $(v_ro:%.5g)
+Viscosity (Pa.s)  = $(v_uPas:%.8f)
+Viscosity (mPa.s) = $(v_uPas*1000:%.8f)
+"""
